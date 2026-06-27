@@ -1,4 +1,4 @@
-# MINISTER LIKE API - FULLY WORKING VERSION
+# MINISTER LIKE API - FULLY WORKING WITH ALL SERVERS
 # POWERED BY : @minister_69
 # CHANNEL : @minister_6T9
 
@@ -32,52 +32,14 @@ tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
 TOKEN_CACHE = {}
 
-# SSL Context (ignore certificate errors)
+# SSL Context
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-# ======================= WORKING API ENDPOINTS =======================
-def get_api_endpoints(server_name):
-    """Return working endpoints for each server with fallbacks"""
-    
-    # Primary endpoints (most reliable)
-    primary = {
-        "IND": "https://client.ind.freefiremobile.com",
-        "BR": "https://client.us.freefiremobile.com",  # BR uses US servers
-        "US": "https://client.us.freefiremobile.com",
-        "SAC": "https://client.us.freefiremobile.com",
-        "NA": "https://client.us.freefiremobile.com",
-        "PK": "https://client.us.freefiremobile.com",  # ✅ PK uses US servers
-        "BD": "https://clientbp.ggpolarbear.com",
-        "RU": "https://clientbp.ggpolarbear.com"
-    }
-    
-    # Fallback endpoints
-    fallbacks = {
-        "IND": ["https://clientbp.ggpolarbear.com"],
-        "BR": ["https://clientbp.ggpolarbear.com"],
-        "US": ["https://clientbp.ggpolarbear.com"],
-        "PK": [
-            "https://clientpk.freefiremobile.com",  # Try specific
-            "https://clientbp.ggpolarbear.com",      # Global fallback
-            "https://client.freefiremobile.com"      # Main domain
-        ],
-        "BD": ["https://client.us.freefiremobile.com"],
-        "RU": ["https://client.us.freefiremobile.com"]
-    }
-    
-    base_url = primary.get(server_name, "https://clientbp.ggpolarbear.com")
-    fallback_list = fallbacks.get(server_name, ["https://clientbp.ggpolarbear.com"])
-    
-    return {
-        'primary': base_url,
-        'fallbacks': fallback_list
-    }
-
-# ======================= ACCOUNT LOADING =======================
+# ======================= ACCOUNT LOADING WITH DEBUG =======================
 def load_accounts(server_name):
-    """Load accounts with smart fallback"""
+    """Load accounts with detailed logging"""
     try:
         # Map server to filename
         server_files = {
@@ -92,27 +54,29 @@ def load_accounts(server_name):
         }
         
         filename = server_files.get(server_name, "account_ind.txt")
+        print(f"🔍 Looking for: {filename} for server {server_name}")
         
-        # Try specific file first
+        # Check if file exists
         if not os.path.exists(filename):
-            print(f"⚠️ {filename} not found, trying account_ind.txt")
-            filename = "account_ind.txt"
+            print(f"⚠️ {filename} not found!")
             
-        if not os.path.exists(filename):
-            print(f"❌ No account file found for {server_name}")
-            # Try all possible files as last resort
-            for f in ["account_ind.txt", "account_br.txt", "account_bd.txt", "account_pk.txt"]:
+            # Try fallback files
+            fallback_files = ["account_ind.txt", "account_br.txt", "account_bd.txt", "account_pk.txt"]
+            for f in fallback_files:
                 if os.path.exists(f):
                     filename = f
                     print(f"✅ Using fallback: {filename}")
                     break
             else:
+                print(f"❌ No account files found!")
                 return []
         
+        # Load accounts
         accounts = []
-        print(f"📂 Loading from: {filename} for server {server_name}")
+        print(f"📂 Loading from: {filename}")
         
         with open(filename, "r", encoding='utf-8') as f:
+            line_count = 0
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
@@ -125,8 +89,9 @@ def load_accounts(server_name):
                     
                     if uid and password and uid.isdigit():
                         accounts.append({"uid": uid, "password": password})
+                        line_count += 1
         
-        print(f"✅ Loaded {len(accounts)} accounts")
+        print(f"✅ Loaded {line_count} accounts from {filename}")
         return accounts
         
     except Exception as e:
@@ -135,7 +100,7 @@ def load_accounts(server_name):
 
 # ======================= TOKEN GENERATION =======================
 async def generate_jwt_token(uid, password):
-    """Generate JWT token with retry logic"""
+    """Generate JWT token"""
     try:
         encoded_password = urllib.parse.quote(password)
         url = f"https://ff-jwt-gen-api.lovable.app/api/public/token?uid={uid}&password={encoded_password}"
@@ -148,7 +113,7 @@ async def generate_jwt_token(uid, password):
                         return data.get('jwt_token') or data.get('token')
                 return None
     except Exception as e:
-        print(f"❌ Token generation error for {uid}: {e}")
+        print(f"❌ Token error for {uid}: {e}")
         return None
 
 async def get_valid_token(uid, password):
@@ -156,7 +121,7 @@ async def get_valid_token(uid, password):
     if uid in TOKEN_CACHE:
         cached = TOKEN_CACHE[uid]
         remaining = (cached["expires_at"] - datetime.utcnow()).total_seconds()
-        if remaining > 1800:  # 30 minutes buffer
+        if remaining > 1800:
             return cached["token"]
     
     token = await generate_jwt_token(uid, password)
@@ -180,7 +145,6 @@ async def get_valid_token(uid, password):
 
 # ======================= ENCRYPTION =======================
 def encrypt_message(plaintext):
-    """Encrypt message with AES"""
     key = b'Yg&tc%DEuh6%Zc^8'
     iv = b'6oyZDr22E3ychjM%'
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -188,7 +152,6 @@ def encrypt_message(plaintext):
     return binascii.hexlify(cipher.encrypt(padded_message)).decode('utf-8')
 
 def enc(uid):
-    """Encrypt UID"""
     message = uid_generator_pb2.uid_generator()
     message.krishna_ = int(uid)
     message.teamXdarks = 1
@@ -196,7 +159,6 @@ def enc(uid):
 
 # ======================= PROTOBUF =======================
 def create_protobuf_message(user_id, region):
-    """Create like protobuf message"""
     message = like_pb2.like()
     message.uid = int(user_id)
     
@@ -208,7 +170,6 @@ def create_protobuf_message(user_id, region):
     return message.SerializeToString()
 
 def decode_protobuf(binary):
-    """Decode protobuf response"""
     try:
         items = like_count_pb2.Info()
         items.ParseFromString(binary)
@@ -217,42 +178,40 @@ def decode_protobuf(binary):
         return None
 
 # ======================= API REQUESTS =======================
-def make_request(url, data, headers, timeout=15):
-    """Make HTTP request with retry and SSL bypass"""
-    try:
-        response = requests.post(
-            url, 
-            data=data, 
-            headers=headers, 
-            verify=False,  # Bypass SSL
-            timeout=timeout
-        )
-        return response
-    except requests.exceptions.Timeout:
-        print(f"⏰ Timeout: {url}")
-        return None
-    except requests.exceptions.ConnectionError:
-        print(f"🔌 Connection error: {url}")
-        return None
-    except Exception as e:
-        print(f"❌ Request error: {e}")
-        return None
+def get_api_endpoints(server_name):
+    """Get working endpoints for each server"""
+    endpoints = {
+        "primary": {
+            "IND": "https://client.ind.freefiremobile.com",
+            "BR": "https://client.us.freefiremobile.com",
+            "US": "https://client.us.freefiremobile.com",
+            "SAC": "https://client.us.freefiremobile.com",
+            "NA": "https://client.us.freefiremobile.com",
+            "PK": "https://client.us.freefiremobile.com",  # ✅ PK uses US
+            "BD": "https://clientbp.ggpolarbear.com",
+            "RU": "https://clientbp.ggpolarbear.com"
+        },
+        "fallbacks": {
+            "PK": ["https://clientbp.ggpolarbear.com", "https://client.freefiremobile.com"],
+            "BD": ["https://client.us.freefiremobile.com"],
+            "IND": ["https://clientbp.ggpolarbear.com"],
+            "BR": ["https://clientbp.ggpolarbear.com"]
+        }
+    }
+    
+    base = endpoints["primary"].get(server_name, "https://clientbp.ggpolarbear.com")
+    fallbacks = endpoints["fallbacks"].get(server_name, ["https://clientbp.ggpolarbear.com"])
+    
+    return {"primary": base, "fallbacks": fallbacks}
 
 def get_player_info(encrypted_uid, server_name, token):
-    """Get player info with smart endpoint fallback"""
+    """Get player info with fallback"""
     endpoints = get_api_endpoints(server_name)
     
-    # Build URL list to try
     urls_to_try = []
-    
-    # Add primary
     urls_to_try.append(f"{endpoints['primary']}/GetPlayerPersonalShow")
-    
-    # Add fallbacks
     for fallback in endpoints['fallbacks']:
         urls_to_try.append(f"{fallback}/GetPlayerPersonalShow")
-    
-    # Remove duplicates
     urls_to_try = list(dict.fromkeys(urls_to_try))
     
     headers = {
@@ -268,27 +227,20 @@ def get_player_info(encrypted_uid, server_name, token):
     for url in urls_to_try:
         try:
             print(f"🔄 Trying: {url}")
-            response = make_request(url, edata, headers)
-            
+            response = requests.post(url, data=edata, headers=headers, verify=False, timeout=15)
             if response and response.status_code == 200:
-                print(f"✅ Success with: {url}")
+                print(f"✅ Success: {url}")
                 return decode_protobuf(response.content)
-            else:
-                status = response.status_code if response else "No response"
-                print(f"❌ Failed ({status}): {url}")
-                
         except Exception as e:
-            print(f"⚠️ Error with {url}: {e}")
+            print(f"⚠️ Error: {e}")
             continue
     
-    print(f"❌ All endpoints failed for {server_name}")
     return None
 
 async def send_like(encrypted_uid, token, server_name):
-    """Send like with smart endpoint selection"""
+    """Send like with fallback"""
     endpoints = get_api_endpoints(server_name)
     
-    # Build URL list
     urls_to_try = []
     urls_to_try.append(f"{endpoints['primary']}/LikeProfile")
     for fallback in endpoints['fallbacks']:
@@ -308,47 +260,33 @@ async def send_like(encrypted_uid, token, server_name):
     for url in urls_to_try:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, 
-                    data=edata, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=10),
-                    ssl=False  # Bypass SSL
-                ) as response:
+                async with session.post(url, data=edata, headers=headers, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as response:
                     if response.status == 200:
                         return response.status, url
-                    print(f"❌ Like failed ({response.status}): {url}")
-        except Exception as e:
-            print(f"⚠️ Like error with {url}: {e}")
+        except:
             continue
     
     return 500, None
 
 # ======================= MAIN LOGIC =======================
 async def process_account(target_uid, encrypted_uid, account, semaphore, server_name):
-    """Process single account"""
     async with semaphore:
         try:
             token = await get_valid_token(account['uid'], account['password'])
             if not token:
                 return 500, account['uid']
             
-            status, used_url = await send_like(encrypted_uid, token, server_name)
+            status, _ = await send_like(encrypted_uid, token, server_name)
             
             if status == 200:
                 liked_cache[target_uid].add(account['uid'])
-                print(f"✅ {account['uid']} liked successfully")
                 return status, account['uid']
             
-            print(f"❌ {account['uid']} failed: {status}")
             return status, account['uid']
-            
-        except Exception as e:
-            print(f"❌ Error processing {account['uid']}: {e}")
+        except:
             return 500, account['uid']
 
 async def send_all_likes(target_uid, server_name):
-    """Send likes from all accounts"""
     protobuf_message = create_protobuf_message(target_uid, server_name)
     encrypted_uid = encrypt_message(protobuf_message)
     
@@ -356,7 +294,6 @@ async def send_all_likes(target_uid, server_name):
     if not accounts:
         return {'success': 0, 'failed': 0, 'total': 0, 'already_liked': 0}
     
-    # Filter already liked
     already_liked = liked_cache.get(target_uid, set())
     fresh_accounts = [acc for acc in accounts if acc['uid'] not in already_liked]
     
@@ -372,10 +309,10 @@ async def send_all_likes(target_uid, server_name):
         }
     
     random.shuffle(fresh_accounts)
-    
     semaphore = asyncio.Semaphore(20)
     tasks = []
-    for acc in fresh_accounts[:1000]:  # Limit for performance
+    
+    for acc in fresh_accounts[:1000]:
         tasks.append(process_account(target_uid, encrypted_uid, acc, semaphore, server_name))
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -416,7 +353,6 @@ def handle_requests():
     if server_name not in valid_servers:
         return jsonify({"error": f"Invalid server. Use: {valid_servers}"}), 400
 
-    # Check daily limit
     today_midnight = get_today_midnight_timestamp()
     count, last_reset = tracker[client_ip]
     if last_reset < today_midnight:
@@ -426,7 +362,6 @@ def handle_requests():
     if count >= KEY_LIMIT:
         return jsonify({"error": "Daily limit reached", "remains": f"(0/{KEY_LIMIT})"}), 429
 
-    # Get token for checking
     accounts = load_accounts(server_name)
     if not accounts:
         return jsonify({"error": f"No accounts for {server_name}"}), 500
@@ -436,7 +371,6 @@ def handle_requests():
         try:
             check_token = asyncio.run(get_valid_token(account['uid'], account['password']))
             if check_token:
-                print(f"✅ Token from {account['uid']}")
                 break
         except:
             continue
@@ -446,7 +380,6 @@ def handle_requests():
     
     encrypted_uid = enc(uid)
     
-    # Get before likes
     before = get_player_info(encrypted_uid, server_name, check_token)
     if before is None:
         return jsonify({"error": "Could not get player info", "status": 0}), 200
@@ -457,10 +390,8 @@ def handle_requests():
     except:
         return jsonify({"error": "Data parsing failed"}), 200
 
-    # Send likes
     result = asyncio.run(send_all_likes(uid, server_name))
 
-    # Get after likes
     after = get_player_info(encrypted_uid, server_name, check_token)
     if after is None:
         return jsonify({"error": "Could not verify likes after"}), 200
@@ -492,12 +423,10 @@ def handle_requests():
             "successful_likes": result['success']
         })
     except Exception as e:
-        print(f"❌ Final error: {e}")
         return jsonify({"error": str(e), "status": 0}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Check API health"""
     return jsonify({
         "status": "working",
         "servers": ["IND", "BR", "US", "SAC", "NA", "BD", "RU", "PK"],
@@ -507,7 +436,6 @@ def health_check():
 
 @app.route('/reset-cache', methods=['GET'])
 def reset_cache():
-    """Reset liked cache"""
     key = request.args.get("key")
     if key != "JMLB":
         return jsonify({"error": "Invalid key"}), 403
@@ -519,21 +447,50 @@ def reset_cache():
     return jsonify({"message": "All caches cleared", "credit": "@minister_69"})
 
 def get_today_midnight_timestamp():
-    """Get today's midnight timestamp"""
     now = datetime.now()
     midnight = datetime(now.year, now.month, now.day)
     return midnight.timestamp()
+
+# ======================= CHECK ALL ACCOUNT FILES =======================
+def check_account_files():
+    """Check and display all account files"""
+    files = {
+        "account_ind.txt": "IND Server",
+        "account_br.txt": "BR/US/SAC/NA Servers",
+        "account_pk.txt": "PK Server",
+        "account_bd.txt": "BD/RU Server"
+    }
+    
+    print("\n📁 ACCOUNT FILES STATUS:")
+    print("=" * 50)
+    
+    for filename, description in files.items():
+        if os.path.exists(filename):
+            # Count accounts
+            count = 0
+            try:
+                with open(filename, "r", encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and ':' in line:
+                            count += 1
+            except:
+                pass
+            print(f"✅ {filename:20} - {description:25} ({count} accounts)")
+        else:
+            print(f"❌ {filename:20} - {description:25} (NOT FOUND)")
+    
+    print("=" * 50)
 
 # ======================= MAIN =======================
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 MINISTER LIKE API v2.0 - FULLY WORKING")
     print("=" * 60)
-    print("📁 Account files needed:")
-    print("   - account_ind.txt (IND server)")
-    print("   - account_br.txt (BR/US/SAC/NA servers)")
-    print("   - account_pk.txt (PK server)")
-    print("   - account_bd.txt (BD/RU server)")
+    
+    # Check all account files
+    check_account_files()
+    
     print("\n🌍 SMART ENDPOINT SYSTEM:")
     print("   ✅ PK server uses US endpoints (reliable)")
     print("   ✅ Automatic fallback to global servers")
