@@ -103,7 +103,7 @@ async def generate_jwt_token(uid, password):
     """Generate JWT token"""
     try:
         encoded_password = urllib.parse.quote(password)
-        url = f"https://ff-jwt-gen-api.lovable.app/api/public/token?uid={uid}&password={encoded_password}"
+        url = f"http://jwt.thug4ff.xyz/token?uid={uid}&password={encoded_password}"
         
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=30) as response:
