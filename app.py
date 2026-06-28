@@ -1,4 +1,5 @@
-# MINISTER LIKE API - FULLY WORKING WITH ALL SERVERS
+# === like_api.py ===
+# MINISTER LIKE API v3.0 - FULLY FIXED
 # POWERED BY : @minister_69
 # CHANNEL : @minister_6T9
 
@@ -16,91 +17,121 @@ import like_count_pb2
 import uid_generator_pb2
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import os
 import urllib.parse
 import jwt
-from datetime import timedelta
 import ssl
+import threading
+import traceback
 
 app = Flask(__name__)
 
-# Configuration
+# ======================= CONFIGURATION =======================
 KEY_LIMIT = 90
 tracker = defaultdict(lambda: [0, time.time()])
 liked_cache = defaultdict(set)
 TOKEN_CACHE = {}
+LIKED_CACHE_FILE = "liked_cache.json"
+ACCOUNT_FILES = ["account_ind.txt", "account_br.txt", "account_bd.txt", "account_pk.txt"]
 
 # SSL Context
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-# ======================= ACCOUNT LOADING WITH DEBUG =======================
-def load_accounts(server_name):
-    """Load accounts with detailed logging"""
+# ======================= CACHE PERSISTENCE =======================
+def save_liked_cache():
+    """Save liked cache to file"""
     try:
-        # Map server to filename
-        server_files = {
-            "IND": "account_ind.txt",
-            "BR": "account_br.txt",
-            "US": "account_br.txt",
-            "SAC": "account_br.txt",
-            "NA": "account_br.txt",
-            "PK": "account_pk.txt",
-            "BD": "account_bd.txt",
-            "RU": "account_bd.txt"
-        }
-        
-        filename = server_files.get(server_name, "account_ind.txt")
-        print(f"🔍 Looking for: {filename} for server {server_name}")
-        
-        # Check if file exists
-        if not os.path.exists(filename):
-            print(f"⚠️ {filename} not found!")
-            
-            # Try fallback files
-            fallback_files = ["account_ind.txt", "account_br.txt", "account_bd.txt", "account_pk.txt"]
-            for f in fallback_files:
-                if os.path.exists(f):
-                    filename = f
-                    print(f"✅ Using fallback: {filename}")
-                    break
-            else:
-                print(f"❌ No account files found!")
-                return []
-        
-        # Load accounts
-        accounts = []
-        print(f"📂 Loading from: {filename}")
-        
+        data = {k: list(v) for k, v in liked_cache.items()}
+        with open(LIKED_CACHE_FILE, 'w') as f:
+            json.dump(data, f)
+        print(f"💾 Liked cache saved: {len(data)} entries")
+    except Exception as e:
+        print(f"⚠️ Failed to save cache: {e}")
+
+def load_liked_cache():
+    """Load liked cache from file"""
+    global liked_cache
+    if os.path.exists(LIKED_CACHE_FILE):
+        try:
+            with open(LIKED_CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    liked_cache[k] = set(v)
+            print(f"📂 Liked cache loaded: {len(data)} entries")
+        except Exception as e:
+            print(f"⚠️ Failed to load cache: {e}")
+
+# ======================= ACCOUNT LOADING =======================
+def load_accounts_from_file(filename):
+    """Load accounts from a specific file"""
+    accounts = []
+    if not os.path.exists(filename):
+        return accounts
+    
+    try:
         with open(filename, "r", encoding='utf-8') as f:
-            line_count = 0
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                
                 if ':' in line:
                     parts = line.split(':', 1)
                     uid = parts[0].strip()
                     password = parts[1].strip()
-                    
                     if uid and password and uid.isdigit():
                         accounts.append({"uid": uid, "password": password})
-                        line_count += 1
-        
-        print(f"✅ Loaded {line_count} accounts from {filename}")
-        return accounts
-        
     except Exception as e:
-        print(f"❌ Error loading accounts: {e}")
-        return []
+        print(f"❌ Error loading {filename}: {e}")
+    
+    return accounts
+
+def load_accounts(server_name):
+    """Load accounts with fallback to all files"""
+    # Map server to filename
+    server_files = {
+        "IND": "account_ind.txt",
+        "BR": "account_br.txt",
+        "US": "account_br.txt",
+        "SAC": "account_br.txt",
+        "NA": "account_br.txt",
+        "PK": "account_pk.txt",
+        "BD": "account_bd.txt",
+        "RU": "account_bd.txt"
+    }
+    
+    filename = server_files.get(server_name, "account_ind.txt")
+    print(f"🔍 Looking for: {filename} for server {server_name}")
+    
+    # Try primary file
+    accounts = load_accounts_from_file(filename)
+    if accounts:
+        print(f"✅ Loaded {len(accounts)} accounts from {filename}")
+        return accounts
+    
+    # Try fallback files
+    print(f"⚠️ {filename} not found or empty, trying fallbacks...")
+    all_accounts = []
+    for f in ACCOUNT_FILES:
+        if os.path.exists(f):
+            accs = load_accounts_from_file(f)
+            if accs:
+                all_accounts.extend(accs)
+                print(f"✅ Loaded {len(accs)} from fallback {f}")
+    
+    if all_accounts:
+        print(f"✅ Total {len(all_accounts)} accounts loaded from fallbacks")
+        return all_accounts
+    
+    print(f"❌ No accounts found!")
+    return []
 
 # ======================= TOKEN GENERATION =======================
 async def generate_jwt_token(uid, password):
-    """Generate JWT token"""
+    """Generate JWT token with full response parsing"""
     try:
         encoded_password = urllib.parse.quote(password)
         url = f"http://jwt.thug4ff.xyz/token?uid={uid}&password={encoded_password}"
@@ -109,37 +140,62 @@ async def generate_jwt_token(uid, password):
             async with session.get(url, timeout=30) as response:
                 if response.status == 200:
                     data = await response.json()
-                    if isinstance(data, dict):
-                        return data.get('jwt_token') or data.get('token')
+                    if isinstance(data, dict) and not data.get('error', True):
+                        # ✅ Check all possible token fields
+                        token = data.get('token') or data.get('jwt_token') or data.get('token_access')
+                        if token:
+                            return {
+                                'token': token,
+                                'api': data.get('api'),
+                                'server': data.get('server'),
+                                'account_id': data.get('account_id'),
+                                'status_code': data.get('status_code')
+                            }
                 return None
     except Exception as e:
         print(f"❌ Token error for {uid}: {e}")
         return None
 
 async def get_valid_token(uid, password):
-    """Get valid token with caching"""
+    """Get valid token with enhanced caching"""
+    # Check cache
     if uid in TOKEN_CACHE:
         cached = TOKEN_CACHE[uid]
-        remaining = (cached["expires_at"] - datetime.utcnow()).total_seconds()
-        if remaining > 1800:
-            return cached["token"]
+        if cached.get('expires_at'):
+            remaining = (cached['expires_at'] - datetime.utcnow()).total_seconds()
+            if remaining > 1800:  # 30 minutes
+                return cached['token']
+        else:
+            # No expiry set, assume valid
+            return cached['token']
     
-    token = await generate_jwt_token(uid, password)
-    if not token:
+    # Generate new token
+    result = await generate_jwt_token(uid, password)
+    if not result:
         return None
     
+    token = result['token']
+    
+    # Parse expiry from JWT
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
-        exp = payload.get("exp")
-        TOKEN_CACHE[uid] = {
-            "token": token,
-            "expires_at": datetime.utcfromtimestamp(exp)
-        }
-    except:
-        TOKEN_CACHE[uid] = {
-            "token": token,
-            "expires_at": datetime.utcnow() + timedelta(hours=24)
-        }
+        exp = payload.get('exp', 0)
+        if exp and exp > 0:
+            expires_at = datetime.utcfromtimestamp(exp)
+        else:
+            expires_at = datetime.utcnow() + timedelta(hours=24)
+    except Exception as e:
+        print(f"⚠️ JWT decode error: {e}")
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+    
+    # Cache with all data
+    TOKEN_CACHE[uid] = {
+        'token': token,
+        'expires_at': expires_at,
+        'api_endpoint': result.get('api'),
+        'server': result.get('server'),
+        'account_id': result.get('account_id')
+    }
     
     return token
 
@@ -174,12 +230,23 @@ def decode_protobuf(binary):
         items = like_count_pb2.Info()
         items.ParseFromString(binary)
         return items
-    except:
+    except Exception as e:
+        print(f"⚠️ Protobuf decode error: {e}")
         return None
 
-# ======================= API REQUESTS =======================
+# ======================= API ENDPOINTS =======================
 def get_api_endpoints(server_name):
-    """Get working endpoints for each server"""
+    """Get working endpoints with dynamic fallback from token cache"""
+    # Check if we have a cached endpoint from token
+    for uid, cache in TOKEN_CACHE.items():
+        if cache.get('server') == server_name and cache.get('api_endpoint'):
+            endpoint = cache['api_endpoint']
+            return {
+                "primary": endpoint,
+                "fallbacks": [endpoint]
+            }
+    
+    # Static mapping
     endpoints = {
         "primary": {
             "IND": "https://client.ind.freefiremobile.com",
@@ -187,7 +254,7 @@ def get_api_endpoints(server_name):
             "US": "https://client.us.freefiremobile.com",
             "SAC": "https://client.us.freefiremobile.com",
             "NA": "https://client.us.freefiremobile.com",
-            "PK": "https://client.us.freefiremobile.com",  # ✅ PK uses US
+            "PK": "https://client.us.freefiremobile.com",
             "BD": "https://clientbp.ggpolarbear.com",
             "RU": "https://clientbp.ggpolarbear.com"
         },
@@ -283,7 +350,8 @@ async def process_account(target_uid, encrypted_uid, account, semaphore, server_
                 return status, account['uid']
             
             return status, account['uid']
-        except:
+        except Exception as e:
+            print(f"⚠️ Process error: {e}")
             return 500, account['uid']
 
 async def send_all_likes(target_uid, server_name):
@@ -292,7 +360,7 @@ async def send_all_likes(target_uid, server_name):
     
     accounts = load_accounts(server_name)
     if not accounts:
-        return {'success': 0, 'failed': 0, 'total': 0, 'already_liked': 0}
+        return {'success': 0, 'failed': 0, 'total': 0, 'already_liked': 0, 'fresh_used': 0}
     
     already_liked = liked_cache.get(target_uid, set())
     fresh_accounts = [acc for acc in accounts if acc['uid'] not in already_liked]
@@ -312,20 +380,34 @@ async def send_all_likes(target_uid, server_name):
     semaphore = asyncio.Semaphore(20)
     tasks = []
     
-    for acc in fresh_accounts[:1000]:
+    # Limit to 1000 accounts per request
+    max_accounts = min(len(fresh_accounts), 1000)
+    for acc in fresh_accounts[:max_accounts]:
         tasks.append(process_account(target_uid, encrypted_uid, acc, semaphore, server_name))
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    successful = sum(1 for r in results if isinstance(r, tuple) and r[0] == 200)
-    failed = sum(1 for r in results if isinstance(r, tuple) and r[0] != 200)
+    successful = 0
+    failed = 0
+    for r in results:
+        if isinstance(r, tuple):
+            if r[0] == 200:
+                successful += 1
+            else:
+                failed += 1
+        else:
+            failed += 1
+    
+    # Save cache periodically
+    if successful > 0:
+        threading.Thread(target=save_liked_cache, daemon=True).start()
     
     return {
         'success': successful,
         'failed': failed,
         'total': len(accounts),
         'already_liked': len(already_liked),
-        'fresh_used': len(fresh_accounts[:1000])
+        'fresh_used': len(fresh_accounts[:max_accounts])
     }
 
 # ======================= FLASK ROUTES =======================
@@ -366,13 +448,19 @@ def handle_requests():
     if not accounts:
         return jsonify({"error": f"No accounts for {server_name}"}), 500
     
+    # Get a valid token for checking
     check_token = None
     for account in accounts[:5]:
         try:
-            check_token = asyncio.run(get_valid_token(account['uid'], account['password']))
+            # Create new event loop for token check
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            check_token = loop.run_until_complete(get_valid_token(account['uid'], account['password']))
+            loop.close()
             if check_token:
                 break
-        except:
+        except Exception as e:
+            print(f"⚠️ Token check error: {e}")
             continue
     
     if not check_token:
@@ -387,10 +475,19 @@ def handle_requests():
     try:
         before_data = json.loads(MessageToJson(before))
         before_like = int(before_data['AccountInfo'].get('Likes', 0))
-    except:
+    except Exception as e:
+        print(f"⚠️ Before parse error: {e}")
         return jsonify({"error": "Data parsing failed"}), 200
 
-    result = asyncio.run(send_all_likes(uid, server_name))
+    # Send likes with proper event loop
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(send_all_likes(uid, server_name))
+        loop.close()
+    except Exception as e:
+        print(f"❌ Send likes error: {e}")
+        return jsonify({"error": str(e), "status": 0}), 500
 
     after = get_player_info(encrypted_uid, server_name, check_token)
     if after is None:
@@ -419,10 +516,14 @@ def handle_requests():
             "status": status,
             "remains": f"({remains}/{KEY_LIMIT})",
             "server": server_name,
-            "accounts_used": result['fresh_used'],
-            "successful_likes": result['success']
+            "accounts_used": result.get('fresh_used', 0),
+            "successful_likes": result.get('success', 0),
+            "failed_likes": result.get('failed', 0),
+            "total_accounts": result.get('total', 0)
         })
     except Exception as e:
+        print(f"❌ Final parse error: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e), "status": 0}), 500
 
 @app.route('/health', methods=['GET'])
@@ -430,8 +531,10 @@ def health_check():
     return jsonify({
         "status": "working",
         "servers": ["IND", "BR", "US", "SAC", "NA", "BD", "RU", "PK"],
-        "version": "2.0",
-        "credit": "@minister_69"
+        "version": "3.0",
+        "credit": "@minister_69",
+        "cache_size": len(TOKEN_CACHE),
+        "liked_cache_size": len(liked_cache)
     })
 
 @app.route('/reset-cache', methods=['GET'])
@@ -444,7 +547,32 @@ def reset_cache():
     liked_cache.clear()
     TOKEN_CACHE.clear()
     tracker.clear()
+    
+    # Delete cache file
+    if os.path.exists(LIKED_CACHE_FILE):
+        os.remove(LIKED_CACHE_FILE)
+    
     return jsonify({"message": "All caches cleared", "credit": "@minister_69"})
+
+@app.route('/stats', methods=['GET'])
+def get_stats():
+    key = request.args.get("key")
+    if key != "JMLB":
+        return jsonify({"error": "Invalid key"}), 403
+    
+    total_accounts = {}
+    for f in ACCOUNT_FILES:
+        if os.path.exists(f):
+            count = sum(1 for line in open(f, 'r', encoding='utf-8') 
+                       if line.strip() and not line.startswith('#') and ':' in line)
+            total_accounts[f] = count
+    
+    return jsonify({
+        "token_cache": len(TOKEN_CACHE),
+        "liked_cache_entries": len(liked_cache),
+        "account_files": total_accounts,
+        "daily_ips": len(tracker)
+    })
 
 def get_today_midnight_timestamp():
     now = datetime.now()
@@ -464,9 +592,9 @@ def check_account_files():
     print("\n📁 ACCOUNT FILES STATUS:")
     print("=" * 50)
     
+    total_accounts = 0
     for filename, description in files.items():
         if os.path.exists(filename):
-            # Count accounts
             count = 0
             try:
                 with open(filename, "r", encoding='utf-8') as f:
@@ -474,6 +602,7 @@ def check_account_files():
                         line = line.strip()
                         if line and not line.startswith('#') and ':' in line:
                             count += 1
+                total_accounts += count
             except:
                 pass
             print(f"✅ {filename:20} - {description:25} ({count} accounts)")
@@ -481,26 +610,36 @@ def check_account_files():
             print(f"❌ {filename:20} - {description:25} (NOT FOUND)")
     
     print("=" * 50)
+    print(f"📊 Total accounts across all files: {total_accounts}")
+    print("=" * 50)
 
 # ======================= MAIN =======================
 if __name__ == '__main__':
     print("=" * 60)
-    print("🚀 MINISTER LIKE API v2.0 - FULLY WORKING")
+    print("🚀 MINISTER LIKE API v3.0 - FULLY FIXED")
     print("=" * 60)
     
-    # Check all account files
+    # Load cache
+    load_liked_cache()
+    
+    # Check account files
     check_account_files()
     
     print("\n🌍 SMART ENDPOINT SYSTEM:")
+    print("   ✅ Dynamic endpoint from token response")
     print("   ✅ PK server uses US endpoints (reliable)")
     print("   ✅ Automatic fallback to global servers")
     print("   ✅ SSL verification bypassed")
     print("\n🔧 Features:")
     print("   ✅ Smart endpoint selection")
     print("   ✅ Multiple fallback URLs")
-    print("   ✅ Account caching")
+    print("   ✅ Account caching with persistence")
     print("   ✅ Daily limit: 90/IP")
     print("   ✅ Automatic retry on failure")
+    print("   ✅ Cross-server account fallback")
+    print("   ✅ Fixed token parsing (token_access)")
+    print("   ✅ Fixed JWT expiry handling")
+    print("   ✅ Proper event loop management")
     print("=" * 60)
     print("🏃 Starting server on http://0.0.0.0:5001")
     print("=" * 60)
