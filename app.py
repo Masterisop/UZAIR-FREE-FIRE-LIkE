@@ -1,7 +1,6 @@
 # === like_api.py ===
-# MINISTER LIKE API v3.0 - FULLY FIXED
+# MINISTER LIKE API v3.1 - FULLY FIXED FOR PYTHON 3.13
 # POWERED BY : @minister_69
-# CHANNEL : @minister_6T9
 
 from flask import Flask, request, jsonify
 import asyncio
@@ -17,7 +16,7 @@ import like_count_pb2
 import uid_generator_pb2
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import os
 import urllib.parse
@@ -40,6 +39,15 @@ ACCOUNT_FILES = ["account_ind.txt", "account_br.txt", "account_bd.txt", "account
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
+
+# ======================= TIME UTILITIES (Python 3.13 Compatible) =======================
+def utc_now():
+    """Get current UTC datetime (Python 3.13 compatible)"""
+    return datetime.now(timezone.utc)
+
+def from_timestamp(ts):
+    """Convert timestamp to UTC datetime (Python 3.13 compatible)"""
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
 
 # ======================= CACHE PERSISTENCE =======================
 def save_liked_cache():
@@ -91,7 +99,6 @@ def load_accounts_from_file(filename):
 
 def load_accounts(server_name):
     """Load accounts with fallback to all files"""
-    # Map server to filename
     server_files = {
         "IND": "account_ind.txt",
         "BR": "account_br.txt",
@@ -106,13 +113,11 @@ def load_accounts(server_name):
     filename = server_files.get(server_name, "account_ind.txt")
     print(f"🔍 Looking for: {filename} for server {server_name}")
     
-    # Try primary file
     accounts = load_accounts_from_file(filename)
     if accounts:
         print(f"✅ Loaded {len(accounts)} accounts from {filename}")
         return accounts
     
-    # Try fallback files
     print(f"⚠️ {filename} not found or empty, trying fallbacks...")
     all_accounts = []
     for f in ACCOUNT_FILES:
@@ -141,7 +146,6 @@ async def generate_jwt_token(uid, password):
                 if response.status == 200:
                     data = await response.json()
                     if isinstance(data, dict) and not data.get('error', True):
-                        # ✅ Check all possible token fields
                         token = data.get('token') or data.get('jwt_token') or data.get('token_access')
                         if token:
                             return {
@@ -158,37 +162,32 @@ async def generate_jwt_token(uid, password):
 
 async def get_valid_token(uid, password):
     """Get valid token with enhanced caching"""
-    # Check cache
     if uid in TOKEN_CACHE:
         cached = TOKEN_CACHE[uid]
         if cached.get('expires_at'):
-            remaining = (cached['expires_at'] - datetime.utcnow()).total_seconds()
+            remaining = (cached['expires_at'] - utc_now()).total_seconds()
             if remaining > 1800:  # 30 minutes
                 return cached['token']
         else:
-            # No expiry set, assume valid
             return cached['token']
     
-    # Generate new token
     result = await generate_jwt_token(uid, password)
     if not result:
         return None
     
     token = result['token']
     
-    # Parse expiry from JWT
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
         exp = payload.get('exp', 0)
         if exp and exp > 0:
-            expires_at = datetime.utcfromtimestamp(exp)
+            expires_at = from_timestamp(exp)
         else:
-            expires_at = datetime.utcnow() + timedelta(hours=24)
+            expires_at = utc_now() + timedelta(hours=24)
     except Exception as e:
         print(f"⚠️ JWT decode error: {e}")
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = utc_now() + timedelta(hours=24)
     
-    # Cache with all data
     TOKEN_CACHE[uid] = {
         'token': token,
         'expires_at': expires_at,
@@ -237,16 +236,11 @@ def decode_protobuf(binary):
 # ======================= API ENDPOINTS =======================
 def get_api_endpoints(server_name):
     """Get working endpoints with dynamic fallback from token cache"""
-    # Check if we have a cached endpoint from token
     for uid, cache in TOKEN_CACHE.items():
         if cache.get('server') == server_name and cache.get('api_endpoint'):
             endpoint = cache['api_endpoint']
-            return {
-                "primary": endpoint,
-                "fallbacks": [endpoint]
-            }
+            return {"primary": endpoint, "fallbacks": [endpoint]}
     
-    # Static mapping
     endpoints = {
         "primary": {
             "IND": "https://client.ind.freefiremobile.com",
@@ -270,6 +264,19 @@ def get_api_endpoints(server_name):
     fallbacks = endpoints["fallbacks"].get(server_name, ["https://clientbp.ggpolarbear.com"])
     
     return {"primary": base, "fallbacks": fallbacks}
+
+def safe_get_player_info(data, field, default=0):
+    """Safely extract player info with fallback"""
+    try:
+        if isinstance(data, dict):
+            account_info = data.get('AccountInfo', {})
+            if isinstance(account_info, dict):
+                return account_info.get(field, default)
+            elif hasattr(account_info, field):
+                return getattr(account_info, field, default)
+        return default
+    except Exception:
+        return default
 
 def get_player_info(encrypted_uid, server_name, token):
     """Get player info with fallback"""
@@ -380,7 +387,6 @@ async def send_all_likes(target_uid, server_name):
     semaphore = asyncio.Semaphore(20)
     tasks = []
     
-    # Limit to 1000 accounts per request
     max_accounts = min(len(fresh_accounts), 1000)
     for acc in fresh_accounts[:max_accounts]:
         tasks.append(process_account(target_uid, encrypted_uid, acc, semaphore, server_name))
@@ -398,7 +404,6 @@ async def send_all_likes(target_uid, server_name):
         else:
             failed += 1
     
-    # Save cache periodically
     if successful > 0:
         threading.Thread(target=save_liked_cache, daemon=True).start()
     
@@ -448,11 +453,9 @@ def handle_requests():
     if not accounts:
         return jsonify({"error": f"No accounts for {server_name}"}), 500
     
-    # Get a valid token for checking
     check_token = None
     for account in accounts[:5]:
         try:
-            # Create new event loop for token check
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             check_token = loop.run_until_complete(get_valid_token(account['uid'], account['password']))
@@ -474,12 +477,13 @@ def handle_requests():
 
     try:
         before_data = json.loads(MessageToJson(before))
-        before_like = int(before_data['AccountInfo'].get('Likes', 0))
+        # ✅ SAFE EXTRACTION — FIXES KeyError
+        before_like = safe_get_player_info(before_data, 'Likes', 0)
+        print(f"📊 Before likes: {before_like}")
     except Exception as e:
         print(f"⚠️ Before parse error: {e}")
         return jsonify({"error": "Data parsing failed"}), 200
 
-    # Send likes with proper event loop
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -487,6 +491,7 @@ def handle_requests():
         loop.close()
     except Exception as e:
         print(f"❌ Send likes error: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e), "status": 0}), 500
 
     after = get_player_info(encrypted_uid, server_name, check_token)
@@ -495,8 +500,10 @@ def handle_requests():
 
     try:
         after_data = json.loads(MessageToJson(after))
-        after_like = int(after_data['AccountInfo']['Likes'])
-        player_name = str(after_data['AccountInfo']['PlayerNickname'])
+        # ✅ SAFE EXTRACTION — FIXES KeyError
+        after_like = safe_get_player_info(after_data, 'Likes', 0)
+        player_name = safe_get_player_info(after_data, 'PlayerNickname', 'Unknown')
+        print(f"📊 After likes: {after_like}")
         
         like_given = after_like - before_like
         status = 1 if like_given > 0 else 2
@@ -531,7 +538,7 @@ def health_check():
     return jsonify({
         "status": "working",
         "servers": ["IND", "BR", "US", "SAC", "NA", "BD", "RU", "PK"],
-        "version": "3.0",
+        "version": "3.1",
         "credit": "@minister_69",
         "cache_size": len(TOKEN_CACHE),
         "liked_cache_size": len(liked_cache)
@@ -548,7 +555,6 @@ def reset_cache():
     TOKEN_CACHE.clear()
     tracker.clear()
     
-    # Delete cache file
     if os.path.exists(LIKED_CACHE_FILE):
         os.remove(LIKED_CACHE_FILE)
     
@@ -615,14 +621,13 @@ def check_account_files():
 
 # ======================= MAIN =======================
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5001))
+    
     print("=" * 60)
-    print("🚀 MINISTER LIKE API v3.0 - FULLY FIXED")
+    print("🚀 MINISTER LIKE API v3.1 - FULLY FIXED")
     print("=" * 60)
     
-    # Load cache
     load_liked_cache()
-    
-    # Check account files
     check_account_files()
     
     print("\n🌍 SMART ENDPOINT SYSTEM:")
@@ -640,8 +645,10 @@ if __name__ == '__main__':
     print("   ✅ Fixed token parsing (token_access)")
     print("   ✅ Fixed JWT expiry handling")
     print("   ✅ Proper event loop management")
+    print("   ✅ Python 3.13 compatible (no deprecation warnings)")
+    print("   ✅ Safe field extraction (no KeyError)")
     print("=" * 60)
-    print("🏃 Starting server on http://0.0.0.0:5001")
+    print(f"🏃 Starting server on http://0.0.0.0:{port}")
     print("=" * 60)
     
-    app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
